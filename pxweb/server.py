@@ -14,11 +14,15 @@
     POST /api/open               导入图片（dataURL）→ {key, w, h}
     POST /api/op                 执行操作 → {key, w, h, info, palette?, tiles?}
 
-    —— 生成后端（直接采用 rika 原后端，见 rika.py）——
+    —— 生成后端（可在设置页切换）——
+      rika 云   ：见 rika.py，转发 https://api.rika-ai.com/v1/api（异步 job + 积分）
+      comfy 本地 ：见 localgen.py，驱动本机 ComfyUI（同步推理 + 本地像素化）
+
     GET  /api/config             读取配置（api_key 已脱敏）
-    POST /api/config             保存配置 {base_url?, api_key?, model?, timeout?}
-    POST /api/config/test        用候选配置测连通性 → {ok, credits}
-    POST /api/credits            查询积分余额
+    POST /api/config             保存配置 {backend?, base_url?, api_key?, ...}
+    POST /api/config/test        用候选配置测连通性 → {ok, ...}
+    GET  /api/caps               当前后端的能力边界（前端据此禁用选项）
+    POST /api/credits            查询积分余额（本地后端恒为 null）
     POST /api/gen                提交生成任务 → {gen_id, kind, credits}
     POST /api/job                查询任务 {gen_id, wait?} → {job}
 """
@@ -47,6 +51,8 @@ from PIL import Image                                       # noqa: E402
 
 from pxkit import background, grid, imgio, palette, sheet   # noqa: E402
 
+import comfy                                                # noqa: E402
+import localgen                                             # noqa: E402
 import rika                                                 # noqa: E402
 
 WORK.mkdir(parents=True, exist_ok=True)
@@ -204,6 +210,80 @@ OPS = {
 }
 
 
+# ---------------------------------------------------------------- 后端能力
+
+def _flatten_comfy(body: dict) -> dict:
+    """把前端拍的扁平字段收进 config 的嵌套 comfy 字典。
+
+    前端只有一个表单，所以 unet/clip/vae 是和 base_url 平级提交的；
+    rika.save() 只认 DEFAULTS 里的顶层键，这里做一次搬家。
+    """
+    patch = dict(body or {})
+    sub = dict(patch.get("comfy") or {})
+    for k in ("unet", "clip", "vae"):
+        if k in patch:
+            v = str(patch.pop(k) or "").strip()
+            if v:
+                sub[k] = v
+            else:
+                sub.pop(k, None)
+    if sub or "comfy" in patch:
+        patch["comfy"] = sub
+    return patch
+
+
+def _caps() -> dict:
+    """当前生成后端的能力边界。前端据此禁用不支持的选项并给出原因。"""
+    backend = rika.load()["backend"]
+    if backend == "comfy":
+        return localgen.CAPS
+    return {
+        "backend": "rika",
+        "kinds": list(rika.ENDPOINTS),
+        "credits": {k: c for k, (_, c) in rika.ENDPOINTS.items()},
+        "needs_ref_for_anim": True,
+        "notes": {},
+    }
+
+
+def _test_backend(patch: dict) -> dict:
+    """用「尚未保存」的候选配置测连通性。按 patch.backend（缺省用已存的）分流。"""
+    backend = str(patch.get("backend") or rika.load()["backend"]).lower()
+
+    if backend == "comfy":
+        cfg = comfy.load()
+        if patch.get("comfy_url"):
+            cfg["base_url"] = str(patch["comfy_url"]).strip().rstrip("/")
+        try:
+            st = comfy.probe(cfg)
+        except comfy.ComfyError as e:
+            return {"ok": False, "backend": "comfy", "error": str(e),
+                    "detail": e.detail}
+        miss = []
+        models = st.get("models") or {}
+        for key, label in (("unet", "扩散模型"), ("clip", "文本编码器"),
+                           ("vae", "VAE")):
+            lst = models.get(key) or []
+            if lst and cfg.get(key) not in lst:
+                miss.append(f"{label} {cfg[key]} 不存在")
+        return {
+            "ok": True, "backend": "comfy",
+            "base_url": st["base_url"],
+            "version": st["version"],
+            "device": st["device"],
+            "vram_gb": round((st.get("vram_total") or 0) / 2 ** 30, 1),
+            "models": models,
+            "warn": "；".join(miss),
+        }
+
+    try:
+        r = rika.test_connection(patch)
+    except rika.RikaError as e:
+        return {"ok": False, "backend": "rika", "error": str(e), "detail": e.detail}
+    r["backend"] = "rika"
+    return r
+
+
 # ---------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
@@ -271,6 +351,8 @@ class Handler(BaseHTTPRequestHandler):
             self._file(WORK / name)
         elif p == "/api/ops":
             self._json({"ops": sorted(OPS)})
+        elif p == "/api/caps":
+            self._json(_caps())
         elif p == "/api/config":
             self._json({"ok": True, "config": rika.public_view()})
         else:
@@ -298,30 +380,41 @@ class Handler(BaseHTTPRequestHandler):
                 key = body.get("key") if same else _put(out)
                 self._json({**_meta(key, out), "info": info, "same": same})
                 return
-            # ---------------- 生成后端：直接转发 rika 原后端 ----------------
+            # ---------------- 生成后端：rika 云 / 本地 ComfyUI ----------------
             if p == "/api/config":
-                cfg = rika.save(body)
+                cfg = rika.save(_flatten_comfy(body))
                 self._json({"ok": True, "config": rika.public_view(cfg)})
                 return
             if p == "/api/config/test":
-                self._json(rika.test_connection(body))
+                self._json(_test_backend(body))
                 return
             if p == "/api/credits":
-                self._json({"ok": True, "credits": rika.credits()})
+                if rika.load()["backend"] == "comfy":
+                    # 本地不扣积分，返回 null 让前端显示「不适用」
+                    self._json({"ok": True, "credits": None, "backend": "comfy"})
+                else:
+                    self._json({"ok": True, "credits": rika.credits(),
+                                "backend": "rika"})
                 return
             if p == "/api/gen":
                 kind = body.get("kind") or "v2"
-                gen_id = rika.submit(
-                    kind,
-                    body.get("images") or [],
-                    body.get("params") or {},
-                )
-                _, cost = rika.ENDPOINTS.get(kind, ("", 0))
-                self._json({"ok": True, "gen_id": gen_id, "kind": kind, "credits": cost})
+                images = body.get("images") or []
+                params = body.get("params") or {}
+                if rika.load()["backend"] == "comfy":
+                    gen_id = localgen.submit(kind, images, params)
+                    cost = 0
+                else:
+                    gen_id = rika.submit(kind, images, params)
+                    _, cost = rika.ENDPOINTS.get(kind, ("", 0))
+                self._json({"ok": True, "gen_id": gen_id, "kind": kind,
+                            "credits": cost, "backend": rika.load()["backend"]})
                 return
             if p == "/api/job":
                 gen_id = body.get("gen_id") or ""
-                job = rika.wait(gen_id) if body.get("wait") else rika.job(gen_id)
+                if rika.load()["backend"] == "comfy":
+                    job = localgen.job(gen_id)
+                else:
+                    job = rika.wait(gen_id) if body.get("wait") else rika.job(gen_id)
                 self._json({"ok": True, "job": job})
                 return
 
@@ -329,6 +422,8 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError as e:
             self._json({"error": f"图片不存在：{e}"}, 404)
         except rika.RikaError as e:
+            self._json({"error": str(e), "detail": e.detail}, e.status or 502)
+        except comfy.ComfyError as e:
             self._json({"error": str(e), "detail": e.detail}, e.status or 502)
         except Exception as e:                              # noqa: BLE001
             self._json({"error": f"{type(e).__name__}: {e}"}, 500)

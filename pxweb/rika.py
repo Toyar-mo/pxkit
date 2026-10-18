@@ -33,11 +33,18 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 
 DEFAULT_BASE_URL = "https://api.rika-ai.com/v1/api"
+DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
+
+# 生成后端：rika 云端（默认）或本机 ComfyUI。
+BACKENDS = ("rika", "comfy")
 
 # 写进 config.json 的字段及其默认值。顺序即配置页展示顺序。
 DEFAULTS = {
+    "backend": "rika",    # rika | comfy
     "base_url": DEFAULT_BASE_URL,
     "api_key": "",
+    "comfy_url": DEFAULT_COMFY_URL,
+    "comfy": {},          # 本地 ComfyUI 的模型覆盖（unet/clip/vae），由 comfy.py 读
     "model": "",          # 自定义模型名覆盖；留空 = 用后端默认
     "timeout": 120,       # 单次 HTTP 超时（秒）
     "poll_interval": 4,   # 轮询 /jobs 的间隔（秒）
@@ -89,6 +96,14 @@ def load() -> dict:
     cfg["base_url"] = str(cfg["base_url"] or "").strip().rstrip("/") or DEFAULT_BASE_URL
     cfg["api_key"] = str(cfg["api_key"] or "").strip()
     cfg["model"] = str(cfg["model"] or "").strip()
+    cfg["comfy_url"] = (str(cfg["comfy_url"] or "").strip().rstrip("/")
+                        or DEFAULT_COMFY_URL)
+    backend = str(cfg["backend"] or "").strip().lower()
+    cfg["backend"] = backend if backend in BACKENDS else "rika"
+    # comfy 是嵌套字典（unet/clip/vae 覆盖），扁平化会丢东西，单独规整
+    sub = cfg.get("comfy")
+    cfg["comfy"] = {k: str(v).strip() for k, v in sub.items()
+                    if isinstance(k, str) and v} if isinstance(sub, dict) else {}
     for k in ("timeout", "poll_interval", "poll_timeout"):
         try:
             cfg[k] = max(1, int(cfg[k]))
@@ -129,15 +144,22 @@ def mask(key: str) -> str:
 def public_view(cfg: dict | None = None) -> dict:
     """可以安全发给浏览器的配置视图（不含明文 key）。"""
     cfg = cfg or load()
+    sub = cfg.get("comfy") or {}
     return {
+        "backend": cfg["backend"],
         "base_url": cfg["base_url"],
         "api_key_masked": mask(cfg["api_key"]),
         "has_key": bool(cfg["api_key"]),
+        "comfy_url": cfg["comfy_url"],
+        "unet": sub.get("unet", ""),
+        "clip": sub.get("clip", ""),
+        "vae": sub.get("vae", ""),
         "model": cfg["model"],
         "timeout": cfg["timeout"],
         "poll_interval": cfg["poll_interval"],
         "poll_timeout": cfg["poll_timeout"],
         "default_base_url": DEFAULT_BASE_URL,
+        "default_comfy_url": DEFAULT_COMFY_URL,
         "endpoints": [
             {"kind": k, "path": p, "credits": c} for k, (p, c) in ENDPOINTS.items()
         ],
@@ -177,6 +199,30 @@ def _open(req, timeout: int, attempts: int, retry_tls: bool = False):
             time.sleep(0.6 * (i + 1))
     raise RuntimeError("unreachable")
 
+
+def _dig_error(obj) -> str:
+    """从各种后端错误体里挖出人话。
+
+    rika 是 {"detail": "Invalid API key"}；
+    OpenAI 兼容（DeepSeek / Moonshot 等）是 {"error": {"message": "...", "type": ...}}。
+    直接 str() 嵌套 dict 会得到 "{'message': ...}"，既难看也暴露不了真正原因。
+    """
+    if not isinstance(obj, dict):
+        return ""
+    for key in ("detail", "message", "error", "msg"):
+        v = obj.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        if isinstance(v, dict):
+            for k2 in ("message", "detail", "msg", "type", "code"):
+                v2 = v.get(k2)
+                if isinstance(v2, str) and v2.strip():
+                    return v2.strip()
+    return ""
+
+
+def _looks_like_rika(base_url: str) -> bool:
+    return "rika-ai.com" in (base_url or "")
 
 def _request(cfg: dict, method: str, path: str, payload: dict | None = None) -> dict:
     """发一次请求，返回解析后的 JSON。所有失败都转成 RikaError。"""
@@ -221,12 +267,20 @@ def _request(cfg: dict, method: str, path: str, payload: dict | None = None) -> 
         ) from None
 
     if status >= 400:
-        msg = ""
-        if isinstance(obj, dict):
-            msg = str(obj.get("error") or obj.get("message") or obj.get("detail") or "")
+        msg = _dig_error(obj)
+        # 404/405 基本只有一个原因：base_url 指到了别的服务
+        if status in (404, 405):
+            hint = f"找不到接口 {method} {url}"
+            if not _looks_like_rika(cfg.get("base_url", "")):
+                hint += ("\n当前「后端地址」不是 rika —— 这里只对接 rika 的生成接口，"
+                         f"请改成 {DEFAULT_BASE_URL}")
+            else:
+                hint += "\n确认「后端地址」末尾是否少了 /v1/api"
+            raise RikaError(hint, status, body[:400] or None)
         if status in (401, 403):
+            label = "API Key" if _looks_like_rika(cfg.get("base_url", "")) else "后端 API Key"
             raise RikaError(
-                f"API Key 无效或无权限（HTTP {status}）" + (f"：{msg}" if msg else ""),
+                f"{label} 无效或无权限（HTTP {status}）" + (f"：{msg}" if msg else ""),
                 status,
                 body[:400],
             )
@@ -241,7 +295,7 @@ def _request(cfg: dict, method: str, path: str, payload: dict | None = None) -> 
     if not isinstance(obj, dict):
         raise RikaError("后端返回结构异常", status, body[:400])
     if obj.get("error"):
-        raise RikaError(str(obj["error"]), status)
+        raise RikaError(_dig_error(obj) or "后端返回 error", status)
     return obj
 
 

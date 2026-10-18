@@ -493,7 +493,9 @@
   }
 
   // ---------------------------------------------------------------- 设置页
-  // 自定义模型配置：直接指向 rika 原后端。后端（rika.py）只做转发。
+  // 自定义模型配置：rika 云端 / 本地 ComfyUI 二选一。后端只做转发或驱动。
+  const CFG = { backend: "rika" };
+
   const apiGet = async (path) => {
     const r = await fetch(path, { method: "GET" });
     const j = await r.json().catch(() => ({ error: "响应不是 JSON" }));
@@ -507,7 +509,28 @@
     el.className = "cfg-status" + (kind ? " " + kind : "");
   }
 
+  // ---- 后端切换：rika 云端 / 本地 ComfyUI ----
+  // 两套配置字段互斥，切换时只显示对应的那些，避免用户对着用不上的输入框发懵。
+  const CFG_BACKEND_HINT = {
+    rika: "rika 云端：直接用官方 API，按端点扣积分，无需显卡。",
+    comfy: "本地 ComfyUI：走你自己的显卡，不扣积分，出图慢一些。",
+  };
+
+  function cfgSetBackend(backend) {
+    const be = backend === "comfy" ? "comfy" : "rika";
+    document.querySelectorAll("#cfgBackendSeg .seg-item").forEach((b) =>
+      b.classList.toggle("is-active", b.dataset.backend === be));
+    $("cfgSecRika").hidden = be !== "rika";
+    $("cfgSecComfy").hidden = be !== "comfy";
+    $("cfgSecEndpoints").hidden = be !== "rika";
+    $("cfgBackendHint").textContent = CFG_BACKEND_HINT[be];
+    CFG.backend = be;
+  }
+
   function cfgFill(c) {
+    CFG.backend = c.backend === "comfy" ? "comfy" : "rika";
+    cfgSetBackend(CFG.backend);
+
     $("cfgBase").value = c.base_url || "";
     $("cfgBase").placeholder = c.default_base_url || "";
     $("cfgModel").value = c.model || "";
@@ -519,6 +542,16 @@
     $("cfgKeyHint").textContent = c.has_key
       ? "已保存 " + c.api_key_masked + " —— 留空保持不变。"
       : "尚未配置，填入后点「测试连接」验证。";
+
+    // 本地 ComfyUI 的字段
+    $("cfgComfyUrl").value = c.comfy_url || "";
+    $("cfgComfyUnet").value = c.unet || "";
+    $("cfgComfyClip").value = c.clip || "";
+    $("cfgComfyVae").value = c.vae || "";
+    $("cfgComfyHint").textContent = c.comfy_url
+      ? "留空 = 用 comfy.py 里的默认值。"
+      : "还没填地址 —— 默认连 http://127.0.0.1:8188。";
+
     const box = $("cfgEndpoints");
     box.innerHTML = "";
     (c.endpoints || []).forEach((e) => {
@@ -534,14 +567,22 @@
 
   function cfgPayload() {
     const p = {
-      base_url: $("cfgBase").value.trim(),
-      model: $("cfgModel").value.trim(),
+      backend: CFG.backend,
       timeout: Number($("cfgTimeout").value) || undefined,
       poll_interval: Number($("cfgInterval").value) || undefined,
       poll_timeout: Number($("cfgPoll").value) || undefined,
     };
-    const k = $("cfgKey").value.trim();
-    if (k) p.api_key = k;   // 留空 = 不改动已保存的 key
+    if (CFG.backend === "comfy") {
+      p.comfy_url = $("cfgComfyUrl").value.trim();
+      p.unet = $("cfgComfyUnet").value.trim();
+      p.clip = $("cfgComfyClip").value.trim();
+      p.vae = $("cfgComfyVae").value.trim();
+    } else {
+      p.base_url = $("cfgBase").value.trim();
+      p.model = $("cfgModel").value.trim();
+      const k = $("cfgKey").value.trim();
+      if (k) p.api_key = k;   // 留空 = 不改动已保存的 key
+    }
     return p;
   }
 
@@ -563,7 +604,10 @@
   function cfgClose() { $("cfgModal").hidden = true; }
 
   async function cfgTest() {
-    cfgStatus("测试中…");
+    const base = $("cfgBase").value.trim();
+    // 自建镜像也是合法用法，所以不拦；只在明显指错了服务时提前提示一句
+    const suspicious = base && !/rika-ai\.com/i.test(base);
+    cfgStatus(suspicious ? "测试中…（这个地址不是 rika 官方域名，若是自建镜像请忽略此提示）" : "测试中…");
     try {
       const j = await api("/api/config/test", cfgPayload());
       cfgStatus(`连接成功 · 余额 ${j.credits} 积分 · ${j.base_url}`, "ok");
@@ -595,6 +639,9 @@
     $("cfgModal").addEventListener("click", (e) => {
       if (e.target === $("cfgModal")) cfgClose();
     });
+    document.querySelectorAll("#cfgBackendSeg .seg-item").forEach((b) => {
+      b.addEventListener("click", () => cfgSetBackend(b.dataset.backend));
+    });
     $("cfgTest").addEventListener("click", cfgTest);
     $("cfgSave").addEventListener("click", cfgSave);
     $("cfgKey").addEventListener("keydown", (e) => {
@@ -619,6 +666,7 @@
     frames: 0,
     credits: null,
     job: null,
+    caps: null,      // /api/caps 的原样结果，决定积分与参考图要求
   };
 
   const GEN_FRAMES = { v1: [8, 10, 12, 14, 16], v2: [16, 20, 24, 32] };
@@ -626,6 +674,15 @@
   const GEN_KIND_HINT = {
     v1: "V1 · 4 积分／次 · 预设动作，输出 8–16 帧",
     v2: "V2 · 6 积分／次 · 自由提示词，输出 16–32 帧",
+  };
+  // 后端能力表（/api/caps）。rika 收积分、要参考图；本地 ComfyUI 免费、可纯文生图。
+  // 拿不到就按 rika 的规矩来，宁可多要一张图也别提交后被后端拒绝。
+  const GEN_CAPS_FALLBACK = {
+    backend: "rika",
+    kinds: ["v1", "v2", "character", "item", "map"],
+    credits: { v1: 4, v2: 6, character: 1, item: 1, map: 2 },
+    needs_ref_for_anim: true,
+    notes: {},
   };
   const GEN_SLOT_NAME = ["起始", "中间", "结束"];
 
@@ -721,16 +778,46 @@
     box.value = list.indexOf(prev) >= 0 ? String(prev) : String(list[Math.min(2, list.length - 1)]);
   }
 
+  // ---------------------------------------------------------------- 后端能力
+  // 本地 ComfyUI 不收积分、也不强制参考图；rika 两者都要。
+  // 这些差别全部来自 /api/caps，前端不写死，换后端不用改代码。
+  function genCaps() { return GEN.caps || GEN_CAPS_FALLBACK; }
+  function genIsFree() { return !genCaps().credits; }
+  function genNeedRef() { return genCaps().needs_ref_for_anim !== false; }
+
+  function genCostOf(kind) {
+    const caps = genCaps();
+    const c = caps.credits;
+    if (!c || typeof c !== "object") return 0;   // 本地后端：credits 是 0
+    return c[kind] || 0;
+  }
+
+  async function genLoadCaps() {
+    try {
+      GEN.caps = await apiGet("/api/caps");
+    } catch (e) {
+      GEN.caps = null;   // 退回 rika 规矩
+    }
+    genSetKind(GEN.kind);
+  }
+
   function genSetKind(kind) {
     GEN.kind = kind === "v1" ? "v1" : "v2";
     const v1 = GEN.kind === "v1";
     document.querySelectorAll("#genSeg .seg-item").forEach((b) =>
       b.classList.toggle("is-active", b.dataset.kind === GEN.kind));
-    $("genKindHint").textContent = GEN_KIND_HINT[GEN.kind];
+
+    // 提示与价格随后端走：本地免费时不要说「6 积分」，也别说「要参考图」
+    const free = genIsFree();
+    const ref = genNeedRef() ? "需参考图" : "可纯文生图";
+    $("genKindHint").textContent = free
+      ? GEN.kind.toUpperCase() + " · 本地出图 · " + ref
+      : GEN_KIND_HINT[GEN.kind];
 
     const c = GEN_COST[GEN.kind];
-    $("genCost").textContent = String(c.now);
+    $("genCost").textContent = String(free ? 0 : (genCostOf(GEN.kind) || c.now));
     $("genCostOld").textContent = String(c.was);
+    $("genCostWrap").hidden = free;          // 免费就别挂个「0 积分」占位
 
     // V1 用字符串 pixel_size + 预设动作；V2 用 {x,y} + 自由提示词
     $("genSize").hidden = !v1;
@@ -1027,6 +1114,15 @@
   // ---------------------------------------------------------------- 余额
   async function genLoadCredits() {
     const el = $("genCredits");
+    // 本地后端不扣积分：整块余额就别占了，免得让人以为要充值
+    const wrap = $("genCreditsWrap");
+    if (genIsFree()) {
+      if (wrap) wrap.hidden = true;
+      GEN.credits = null;
+      genCostGuard();
+      return;
+    }
+    if (wrap) wrap.hidden = false;
     try {
       const j = await api("/api/credits", {});
       const c = (j && (j.credits !== undefined ? j.credits : j.balance));
@@ -1044,9 +1140,9 @@
   function genCostGuard() {
     const btn = $("genRun");
     if (!btn || GEN.busy) return;
-    const need = GEN_COST[GEN.kind].now;
+    const need = genCostOf(GEN.kind);
     const have = GEN.credits;
-    const short = have !== null && have !== undefined && have < need;
+    const short = !genIsFree() && have !== null && have !== undefined && have < need;
     btn.classList.toggle("is-short", short);
     btn.title = short ? "余额 " + have + " 积分 < 本次需要 " + need + " 积分" : "";
   }
@@ -1063,8 +1159,9 @@
 
     const images = [];
     GEN.refs.forEach((r) => { if (r && r.b64) images.push(r.b64); });
-    if (!images.length) {
-      log("先上传「起始」参考图 —— /generate* 至少要一张输入图", "err");
+    // 参考图是否必需由后端决定：rika 的 /generate* 要图，本地 ComfyUI 能纯文生图
+    if (!images.length && genNeedRef()) {
+      log("先上传「起始」参考图 —— 当前后端至少要一张输入图", "err");
       genSelectSlot(0);
       return;
     }
@@ -1079,8 +1176,8 @@
       $("genPrompt").focus();
       return;
     }
-    const need = GEN_COST[GEN.kind].now;
-    if (GEN.credits !== null && GEN.credits < need) {
+    const need = genCostOf(GEN.kind);
+    if (!genIsFree() && GEN.credits !== null && GEN.credits < need) {
       log("积分不足：" + GEN.kind.toUpperCase() + " 需要 " + need +
           "，当前余额 " + GEN.credits, "err");
       return;
@@ -1093,7 +1190,8 @@
 
     try {
       const j = await api("/api/gen", { kind: GEN.kind, images: images, params: params });
-      log("已受理 gen_id=" + String(j.gen_id).slice(0, 8) + "（" + j.credits + " 积分）", "ok");
+      log("已受理 gen_id=" + String(j.gen_id).slice(0, 8) +
+          (genIsFree() ? "（本地出图，不扣积分）" : "（" + j.credits + " 积分）"), "ok");
       genBusy(true, "排队中…");
       genPoll(j.gen_id);
     } catch (e) {
@@ -1193,6 +1291,7 @@
       acts.appendChild(btn);
     };
     mk("打开原图", "", () => window.open(url, "_blank", "noopener"));
+    mk("下载", "", () => genDownload(url));
     mk("同参数重跑", "is-ghost", genRun);
     mk("送去创作页", "is-ghost", () => genSendToCreate(url));
     box.appendChild(acts);
@@ -1275,6 +1374,27 @@
       log("生成结果已送入创作页", "ok");
     } catch (e) {
       log("送去创作页失败：" + e.message + "（多是 CDN 跨域）", "err");
+    }
+  }
+
+  /** 下载结果图。本地后端是同源的直接存；rika 的 CDN 跨域就退回新窗口打开。 */
+  async function genDownload(url) {
+    const name = "pxkit-gen-" + Date.now() + ".png";
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      log("已下载 " + name, "ok");
+    } catch (e) {
+      window.open(url, "_blank", "noopener");
+      log("直接下载被跨域拦下，已在新窗口打开原图：" + e.message, "err");
     }
   }
 
@@ -1386,7 +1506,8 @@
 
     genSetKind("v2");
     genSelectSlot(0);
-    genLoadCredits();
+    // 先取能力表再取余额 —— 后面的决定（要不要参考图、显示不显示积分）靠它
+    genLoadCaps().then(genLoadCredits);
 
     // 只读测试钩子：只拼参数 / 切片，不提交、不扣积分。
     window.__genTest = {
@@ -1398,6 +1519,11 @@
       padSize: genPadSize,
       scaleFactor: genScaleFactor,
       state: GEN,
+      caps: genCaps,
+      isFree: genIsFree,
+      needRef: genNeedRef,
+      loadCaps: genLoadCaps,
+      loadCredits: genLoadCredits,
       set frames(v) { GEN.frames = v; },
       get frames() { return GEN.frames; },
     };
@@ -1414,9 +1540,15 @@
     const hint = $("bannerHint");
     if (tag && txt && hint) {
       if (gen) {
-        tag.textContent = "在线";
-        txt.textContent = "生成走 rika 原后端 —— 需要先在「设置」里填 API Key，每次生成按端点扣积分。";
-        hint.textContent = "上传起始图 + 写提示词";
+        // 横幅必须说清「这一单算力在谁家」—— 云端扣积分、本地走自己的显卡
+        const free = genIsFree();
+        tag.textContent = free ? "本地" : "在线";
+        txt.textContent = free
+          ? "生成走本机 ComfyUI —— 使用你自己的显卡出图，不扣积分，速度取决于显存。"
+          : "生成走 rika 原后端 —— 需要先在「设置」里填 API Key，每次生成按端点扣积分。";
+        hint.textContent = free
+          ? "写提示词即可，参考图可选"
+          : "上传起始图 + 写提示词";
       } else {
         tag.textContent = "本地";
         txt.textContent = "像素算法全部在本地运行 —— 客户端只做界面，图像处理走 pxkit。";

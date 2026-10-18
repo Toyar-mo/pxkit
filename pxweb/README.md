@@ -24,11 +24,31 @@ python server.py --port 9000 --no-open
 
 ### 字段
 
+配置页顶部先选**生成后端**，两套字段互斥，只有当前选中的那套会提交。
+
+**后端 = rika 云端**
+
 | 字段 | 用途 | 默认 |
 | --- | --- | --- |
 | 后端地址 `base_url` | rika 后端根地址，可换成自建镜像/代理 | `https://api.rika-ai.com/v1/api` |
 | API Key `api_key` | 以 `X-API-Key` 头发送 | 空 |
 | 模型覆盖 `model` | 可选，写进请求体的 `model` 字段；后端不认就忽略 | 空（用后端默认） |
+
+**后端 = 本地 ComfyUI**
+
+| 字段 | 用途 | 默认 |
+| --- | --- | --- |
+| 服务地址 `comfy_url` | 本机 ComfyUI 的 HTTP 地址 | `http://127.0.0.1:8188` |
+| 扩散模型 `unet` | `models/diffusion_models/` 下的文件名 | 空（用 `comfy.py` 的默认值） |
+| 文本编码器 `clip` | `models/text_encoders/` 下的文件名 | 空（用默认值） |
+| VAE `vae` | `models/vae/` 下的文件名 | 空（用默认值） |
+
+三个模型名留空就用 `comfy.py` 里实测过的默认组合；填了就覆盖，不用改代码。
+
+**两边共用**
+
+| 字段 | 用途 | 默认 |
+| --- | --- | --- |
 | 请求超时 `timeout` | 单次 HTTP 超时（秒） | `120` |
 | 轮询间隔 `poll_interval` | 查 `/jobs` 的间隔（秒） | `4` |
 | 轮询上限 `poll_timeout` | 轮询总时长上限（秒） | `900` |
@@ -37,6 +57,17 @@ python server.py --port 9000 --no-open
 
 - **API Key 只写不回读**。`GET /api/config` 只给脱敏形式（如 `sk-t••••••••••••abcd`）；页面上留空保存表示「保持原值不变」。
 - `config.json` 已在 `.gitignore` 里，不会被提交。
+
+### 两个后端的差别
+
+| | rika 云端 | 本地 ComfyUI |
+| --- | --- | --- |
+| 计费 | 按端点扣积分（v1 4 / v2 6 / 角色 1 / 道具 1 / 地图 2） | 免费 |
+| 参考图 | 动画端点至少要一张 | 可纯文生图 |
+| 速度 | 排队 + 云端推理 | 取决于本机显卡 |
+| 实现 | `rika.py` | `comfy.py` + `localgen.py` |
+
+前端不写死这些差别 —— 它启动时读 `GET /api/caps`，据此决定显示不显示积分、要不要强制参考图、横幅怎么说。换后端不用改前端代码。
 
 ### 直接对接的原后端端点
 
@@ -150,10 +181,11 @@ GET  /work/<id>.png          处理结果
 POST /api/open               导入图片（dataURL）→ {key, w, h}
 POST /api/op                 执行操作 → {key, w, h, info, palette?, tiles?}
 
+GET  /api/caps               当前后端能力（哪些 kind、收不收积分、要不要参考图）
 GET  /api/config             读取配置（api_key 已脱敏）
 POST /api/config             保存配置
 POST /api/config/test        用候选配置测连通性 → {ok, credits}
-POST /api/credits            查询积分余额
+POST /api/credits            查询积分余额（本地后端返回 credits: null）
 POST /api/gen                提交生成任务 → {gen_id, kind, credits}
 POST /api/job                查询任务 {gen_id, wait?} → {job}
 ```
@@ -162,26 +194,37 @@ POST /api/job                查询任务 {gen_id, wait?} → {job}
 
 ## 离线自检
 
-生图页有一份浏览器端断言，不提交任务、不消耗积分：
+三份浏览器端断言，都不消耗积分：
 
 ```bash
 python server.py --port 8765 --no-open   # 另开一个终端
-node verify_gen.js                       # 需要本机装了 Chrome
+node verify_gen.js                       # 生图页参数拼装（82 条）
+node verify_cfg.js                       # 设置页后端切换（19 条）
+node run_probe.js verify_local.probe.js  # 本地后端行为（11 条）
 ```
 
-它用 headless Chrome + CDP 打开生成页，跑 82 条断言（V1/V2 参数拼装、留白夹取、
-`scale_factor`、动作联动、切片、拦截顺序），顺带重拍 `docs/gen-page.png`。
-`verify_gen.probe.js` 是注入页面的断言脚本本体，改逻辑时对着改。
+三者都用 headless Chrome + CDP（`node` 内置 `WebSocket`，不需要 `npm i`）：
+
+- `verify_gen.js` —— V1/V2 参数拼装、留白夹取、`scale_factor`、动作联动、切片、拦截顺序，顺带重拍 `docs/gen-page.png`。
+- `verify_cfg.js` —— 设置弹层的 rika / 本地 ComfyUI 切换：哪些字段显示、哪些隐藏、端点表对不对。
+- `run_probe.js <任意 probe.js>` —— 通用跑器，第二个参数给截图文件名就会存进 `docs/`。
+
+`*.probe.js` 是注入页面的断言脚本本体，改逻辑时对着改。`verify_local.probe.js`
+会先把后端切成 ComfyUI —— 它需要本机 ComfyUI 真的在 8188 上跑着。
 
 ## 目录
 
 ```
 pxweb/
 ├── server.py             HTTP 服务（本地处理 + 生成代理）
-├── rika.py               rika 后端客户端（配置读写 + 转发）
+├── rika.py               rika 云端后端客户端（配置读写 + 转发）
+├── comfy.py              本地 ComfyUI 适配层（提交 prompt / 轮询 / 取图）
+├── localgen.py           把 rika 的参数语义翻译成本地 ComfyUI 管线
 ├── config.json           运行时生成，含 API Key，勿提交
-├── verify_gen.js         生图页离线自检（headless Chrome + CDP）
-├── verify_gen.probe.js   自检的浏览器端断言
+├── verify_gen.js         生图页离线自检（82 条）
+├── verify_cfg.js         设置页后端切换自检（19 条）
+├── run_probe.js          通用 CDP 探针跑器
+├── *.probe.js            注入页面的断言本体
 ├── static/
 │   ├── index.html
 │   ├── app.css
@@ -189,3 +232,4 @@ pxweb/
 ├── docs/                 界面截图（README 用）
 └── work/                 处理中间产物
 ```
+

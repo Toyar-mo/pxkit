@@ -191,7 +191,7 @@
               <button class="seg-item is-active" data-kind="v2">V2</button>
             </div>
             <div class="gen-hint" id="genKindHint">V2 · 6 积分／次</div>
-            <div class="gen-credits">
+            <div class="gen-credits" id="genCreditsWrap">
               <span class="tiny muted">余额</span>
               <b id="genCredits">—</b>
               <button class="gen-refresh" id="genCreditsRefresh" title="刷新余额">⟳</button>
@@ -395,7 +395,7 @@
 
           <button class="pixel-btn is-gold gen-run" id="genRun" style="min-height:52px;">
             <span id="genRunLabel">开始生成</span>
-            <span class="gen-run-cost">
+            <span class="gen-run-cost" id="genCostWrap">
               <s id="genCostOld">8</s>
               <b id="genCost">6</b> 积分
             </span>
@@ -437,7 +437,54 @@
 
       <div class="cfg-body">
         <section class="cfg-sec">
-          <div class="cfg-sec-title">连接</div>
+          <div class="cfg-sec-title">生成后端</div>
+          <div class="field">
+            <label>后端 <b>Backend</b></label>
+            <div class="seg" id="cfgBackendSeg">
+              <button class="seg-item is-active" type="button" data-backend="rika">
+                rika 云端 <span class="tiny">· 扣积分</span>
+              </button>
+              <button class="seg-item" type="button" data-backend="comfy">
+                本地 ComfyUI <span class="tiny">· 免费</span>
+              </button>
+            </div>
+            <div class="tiny muted" id="cfgBackendHint">
+              rika 云端：直接用官方 API，按端点扣积分，无需显卡。
+            </div>
+          </div>
+        </section>
+
+        <section class="cfg-sec" id="cfgSecComfy" hidden>
+          <div class="cfg-sec-title">本地 ComfyUI</div>
+
+          <div class="field">
+            <label for="cfgComfyUrl">服务地址 <b>Base URL</b></label>
+            <input class="pixel-input" id="cfgComfyUrl" spellcheck="false" autocomplete="off"
+                   placeholder="http://127.0.0.1:8188">
+            <div class="tiny muted">本机 ComfyUI 的 HTTP 地址。</div>
+          </div>
+
+          <div class="cfg-grid" id="cfgComfyModels">
+            <div class="field">
+              <label for="cfgComfyUnet">扩散模型 <b>UNet</b></label>
+              <input class="pixel-input" id="cfgComfyUnet" spellcheck="false" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="cfgComfyClip">文本编码器 <b>CLIP</b></label>
+              <input class="pixel-input" id="cfgComfyClip" spellcheck="false" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="cfgComfyVae">VAE</label>
+              <input class="pixel-input" id="cfgComfyVae" spellcheck="false" autocomplete="off">
+            </div>
+          </div>
+          <div class="tiny muted" id="cfgComfyHint">
+            留空 = 用 comfy.py 里的默认值。
+          </div>
+        </section>
+
+        <section class="cfg-sec" id="cfgSecRika">
+          <div class="cfg-sec-title">rika 云端</div>
 
           <div class="field">
             <label for="cfgBase">后端地址 <b>Base URL</b></label>
@@ -478,7 +525,7 @@
           </div>
         </section>
 
-        <section class="cfg-sec">
+        <section class="cfg-sec" id="cfgSecEndpoints">
           <div class="cfg-sec-title">端点与积分</div>
           <div class="cfg-eps" id="cfgEndpoints"></div>
         </section>

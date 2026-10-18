@@ -808,6 +808,8 @@ input[type="color"] {
   font-size: 10px;
   color: var(--rika-muted);
   word-break: break-word;
+  white-space: pre-line;   /* 多行错误（带「改成 …」建议）要能换行显示 */
+  line-height: 1.5;
 }
 .cfg-status.ok { color: var(--rika-gold); }
 .cfg-status.err { color: var(--rika-danger); }
