@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0d0221">
+<title>PXKIT · 像素素材工具</title>
+<link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span>PXKIT</div>
+    <nav class="nav">
+      <button class="nav-item is-active" data-nav="create">创作</button>
+      <button class="nav-item" data-nav="detect">检测</button>
+      <button class="nav-item" data-nav="sheet">精灵表</button>
+      <button class="nav-item" data-nav="help">关于</button>
+    </nav>
+    <div class="topbar-right">
+      <div class="lang"><span class="on">中文</span><span>EN</span></div>
+      <button class="pixel-btn is-gold is-sm" id="btnOpenTop">打开图片</button>
+    </div>
+  </header>
+
+  <!-- ================= 状态条 ================= -->
+  <div class="banner">
+    <span class="tag">本地</span>
+    <span class="grow" id="bannerText">像素算法全部在本地运行 —— 客户端只做界面，图像处理走 pxkit。</span>
+    <span class="hint" id="bannerHint">拖入图片即可开始</span>
+  </div>
+
+  <!-- ================= 主区 ================= -->
+  <main class="wrap">
+    <div class="workspace">
+
+      <!-- ---------- 左栏 ---------- -->
+      <aside class="side">
+
+        <!-- 输入图 -->
+        <section class="pixel-card pixel-border" style="padding:16px 14px 14px;">
+          <div class="pixel-card-title">参考图</div>
+          <div class="stack">
+            <div class="dropzone" id="dropzone" tabindex="0">
+              <img id="refThumb" class="dz-thumb" alt="参考图" hidden>
+              <div class="dz-prompt" id="dzPrompt">
+                <div class="dz-icon">＋</div>
+                <div>点击上传</div>
+                <div class="tiny muted">拖拽 / 粘贴亦可</div>
+              </div>
+            </div>
+            <div class="meta-grid" id="imgMeta">
+              <span>尺寸</span><b id="mSize">—</b>
+              <span>倍数</span><b id="mBlock">—</b>
+              <span>颜色</span><b id="mColors">—</b>
+            </div>
+            <input type="file" id="fileInput" class="sr-only" accept="image/*">
+          </div>
+        </section>
+
+        <!-- 参数 -->
+        <section class="pixel-card pixel-border" style="padding:16px 14px 14px;">
+          <div class="pixel-card-title">参数设置</div>
+          <div class="stack">
+
+            <div class="field">
+              <span class="field-label">像素尺寸 <b id="vSize">—</b></span>
+              <div class="row">
+                <button class="pixel-btn is-sm" data-size="32">32</button>
+                <button class="pixel-btn is-sm" data-size="64">64</button>
+                <button class="pixel-btn is-sm" data-size="128">128</button>
+                <button class="pixel-btn is-sm" data-size="256">256</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span class="field-label">颜色数量 <b id="vColors">16</b></span>
+              <input type="range" id="rngColors" min="2" max="64" value="16" step="1">
+            </div>
+
+            <div class="field">
+              <span class="field-label">背景颜色</span>
+              <div class="color-row">
+                <input type="color" id="bgColor" value="#743451">
+                <button class="pixel-btn is-sm" id="btnPickBg">吸四角</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span class="field-label">切分 <b id="vSlice">4 × 4</b></span>
+              <div class="row">
+                <input class="pixel-input" type="number" id="inRows" value="4" min="1" max="64" aria-label="行">
+                <input class="pixel-input" type="number" id="inCols" value="4" min="1" max="64" aria-label="列">
+              </div>
+            </div>
+
+            <label class="switch">
+              <input type="checkbox" id="chkGrid">
+              <span class="track"></span>
+              <span>显示网格线</span>
+            </label>
+
+          </div>
+        </section>
+
+        <!-- 操作 -->
+        <section class="pixel-card pixel-border" style="padding:16px 14px 14px;">
+          <div class="pixel-card-title">操作</div>
+          <div class="stack">
+            <button class="pixel-btn" id="opDetect">检测像素倍数</button>
+            <button class="pixel-btn" id="opDepixel">还原真实分辨率</button>
+            <button class="pixel-btn" id="opQuantize">限色量化</button>
+            <button class="pixel-btn" id="opRemoveBg">抠底透明</button>
+            <div class="row">
+              <button class="pixel-btn" id="opSlice">切分</button>
+              <button class="pixel-btn" id="opPack">拼表</button>
+            </div>
+            <div class="row">
+              <button class="pixel-btn" id="opPad">加留白</button>
+              <button class="pixel-btn" id="opScale">放大</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 主操作 -->
+        <div class="stack">
+          <button class="pixel-btn is-gold" id="btnExport" style="min-height:48px;">导出结果 PNG</button>
+          <button class="pixel-btn is-ghost is-sm" id="btnReset">重置</button>
+        </div>
+
+      </aside>
+
+      <!-- ---------- 右栏 ---------- -->
+      <section class="stage">
+
+        <!-- 工具栏 -->
+        <div class="toolstrip">
+          <button class="pixel-btn is-sm" id="btnFit">适应窗口</button>
+          <button class="pixel-btn is-sm" id="btn11">1:1</button>
+          <span class="sep"></span>
+          <button class="pixel-btn is-sm" id="btnZoomOut">－</button>
+          <span class="zoom-val" id="zoomVal">100%</span>
+          <button class="pixel-btn is-sm" id="btnZoomIn">＋</button>
+          <span class="sep"></span>
+          <button class="pixel-btn is-sm" id="btnToggleGrid">网格</button>
+          <button class="pixel-btn is-sm" id="btnToggleChecker">棋盘格</button>
+          <span class="sep"></span>
+          <button class="pixel-btn is-sm" id="btnSavePng">保存 PNG</button>
+        </div>
+
+        <!-- 画布 -->
+        <div class="canvas-shell" id="canvasShell">
+          <div class="canvas-empty" id="canvasEmpty">上传一张像素图开始<br><span class="tiny">支持 PNG / JPG / WEBP / GIF 首帧</span></div>
+          <img id="canvasImg" class="sr-only" alt="当前图像">
+          <div class="grid-overlay" id="gridOverlay"></div>
+        </div>
+
+        <!-- 结果 -->
+        <div>
+          <div class="result-head">
+            <span>结果</span>
+            <b id="resultInfo">空</b>
+            <span style="margin-left:auto" id="resultCount"></span>
+          </div>
+          <div class="result-body" id="resultBody" style="margin-top:8px;">
+            <div class="result-empty">暂无结果</div>
+          </div>
+        </div>
+
+      </section>
+    </div>
+  </main>
+
+  <!-- ================= 日志 ================= -->
+  <div class="logbar open" id="logbar">
+    <div class="logbar-head" id="logHead">
+      <span class="dot" id="logDot"></span>
+      <span>生成日志</span>
+      <span class="muted" id="logCount">0</span>
+      <span style="margin-left:auto" class="muted" id="logToggle">收起 ▾</span>
+    </div>
+    <div class="logbar-body" id="logBody"></div>
+  </div>
+
+</div>
+<script src="static/app.js"></script>
+</body>
+</html>

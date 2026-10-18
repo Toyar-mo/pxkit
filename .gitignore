@@ -1,0 +1,28 @@
+# ── 逆向勘察产物：第三方代码与素材，不随本仓库分发 ──
+_re_rika/
+
+# ── Python 缓存 ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 运行产物 ──
+out/
+out_gui/
+pxweb/work/
+*.log
+
+# ── 一次性勘察脚本（不进仓库） ──
+_spike*.py
+
+# ── 本地临时图 ──
+pxweb/static/_test.png
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
