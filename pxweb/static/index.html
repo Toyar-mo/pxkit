@@ -15,6 +15,7 @@
     <div class="brand"><span class="dot"></span>PXKIT</div>
     <nav class="nav">
       <button class="nav-item is-active" data-nav="create">创作</button>
+      <button class="nav-item" data-nav="gen">生成</button>
       <button class="nav-item" data-nav="detect">检测</button>
       <button class="nav-item" data-nav="sheet">精灵表</button>
       <button class="nav-item" data-nav="help">关于</button>
@@ -29,13 +30,14 @@
 
   <!-- ================= 状态条 ================= -->
   <div class="banner">
-    <span class="tag">本地</span>
+    <span class="tag" id="bannerTag">本地</span>
     <span class="grow" id="bannerText">像素算法全部在本地运行 —— 客户端只做界面，图像处理走 pxkit。</span>
     <span class="hint" id="bannerHint">拖入图片即可开始</span>
   </div>
 
   <!-- ================= 主区 ================= -->
   <main class="wrap">
+    <div class="page" id="pageCreate">
     <div class="workspace">
 
       <!-- ---------- 左栏 ---------- -->
@@ -172,7 +174,243 @@
         </div>
 
       </section>
-    </div>
+    </div><!-- /workspace -->
+    </div><!-- /pageCreate -->
+
+    <!-- ================= 生成页（对接 rika 原后端） ================= -->
+    <div class="page" id="pageGen" hidden>
+      <div class="gen-work">
+
+        <!-- ---- 左：模型 + 参考图 ---- -->
+        <aside class="gen-left">
+
+          <section class="pixel-card pixel-border gen-card">
+            <div class="pixel-card-title">模型选择</div>
+            <div class="seg" id="genSeg">
+              <button class="seg-item" data-kind="v1">V1</button>
+              <button class="seg-item is-active" data-kind="v2">V2</button>
+            </div>
+            <div class="gen-hint" id="genKindHint">V2 · 6 积分／次</div>
+            <div class="gen-credits">
+              <span class="tiny muted">余额</span>
+              <b id="genCredits">—</b>
+              <button class="gen-refresh" id="genCreditsRefresh" title="刷新余额">⟳</button>
+            </div>
+          </section>
+
+          <section class="pixel-card pixel-border gen-card">
+            <div class="pixel-card-title">参考图</div>
+            <div class="refgrid" id="genRefs">
+              <div class="refslot" data-slot="0" tabindex="0">
+                <img class="refthumb" alt="" hidden>
+                <div class="refph">
+                  <span class="refbadge">起始</span>
+                  <span class="tiny muted">点击上传</span>
+                </div>
+              </div>
+              <div class="refslot" data-slot="1" tabindex="0">
+                <img class="refthumb" alt="" hidden>
+                <div class="refph">
+                  <span class="refbadge">中间</span>
+                  <span class="tiny muted">可选</span>
+                </div>
+              </div>
+              <div class="refslot" data-slot="2" tabindex="0">
+                <img class="refthumb" alt="" hidden>
+                <div class="refph">
+                  <span class="refbadge">结束</span>
+                  <span class="tiny muted">可选</span>
+                </div>
+              </div>
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <button class="pixel-btn is-sm is-ghost" id="genClearRefs">清空参考图</button>
+              <button class="pixel-btn is-sm is-ghost" id="genRotate" title="旋转当前选中的参考图 90°">旋转</button>
+              <button class="pixel-btn is-sm is-ghost" id="genFlip" title="水平翻转当前选中的参考图">翻转</button>
+            </div>
+            <div class="tiny muted gen-refhint" id="genRefHint">点格子选图，再点「旋转」转 90°。</div>
+            <input type="file" id="genFile" class="sr-only" accept="image/*">
+          </section>
+
+        </aside>
+
+        <!-- ---- 右：参数 + 结果 ---- -->
+        <section class="gen-right">
+
+          <section class="pixel-card pixel-border gen-card">
+            <div class="pixel-card-title">参数设置</div>
+            <div class="stack">
+
+              <div class="field">
+                <span class="field-label">提示词</span>
+                <textarea class="pixel-input gen-prompt" id="genPrompt" rows="3"
+                  placeholder="side-view, 2D game character idle animation, body slightly sways."></textarea>
+              </div>
+
+              <div class="field" id="genMotionWrap">
+                <span class="field-label">动作类型 <span class="tiny muted">（留空提示词时用预设）</span></span>
+                <select class="pixel-input" id="genMotion">
+                  <option value="">— 手动 / 用提示词 —</option>
+                  <option value="idle">idle 待机</option>
+                  <option value="walk">walk 行走</option>
+                  <option value="run">run 奔跑</option>
+                  <option value="jump">jump 跳跃</option>
+                  <option value="attack">attack 攻击</option>
+                  <option value="hit">hit 受击</option>
+                  <option value="defeated">defeated 倒地</option>
+                </select>
+              </div>
+
+              <div class="field" id="genAttackWrap" hidden>
+                <span class="field-label">攻击子类型</span>
+                <select class="pixel-input" id="genAttack">
+                  <option value="melee">melee 近战</option>
+                  <option value="ranged">ranged 远程</option>
+                  <option value="other">other 其他</option>
+                </select>
+              </div>
+
+              <div class="gen-2col" id="genSizeWrap">
+                <div class="field">
+                  <span class="field-label">像素尺寸 <b id="genSizeLabel">宽 × 高</b></span>
+                  <div class="gen-xy" id="genSizeXY">
+                    <select class="pixel-input" id="genSizeX">
+                      <option value="32">32</option>
+                      <option value="64">64</option>
+                      <option value="128" selected>128</option>
+                      <option value="256">256</option>
+                    </select>
+                    <span class="gen-x">×</span>
+                    <select class="pixel-input" id="genSizeY">
+                      <option value="32">32</option>
+                      <option value="64">64</option>
+                      <option value="128" selected>128</option>
+                      <option value="256">256</option>
+                    </select>
+                  </div>
+                  <select class="pixel-input" id="genSize" hidden>
+                    <option value="32">32 × 32</option>
+                    <option value="64">64 × 64</option>
+                    <option value="128" selected>128 × 128</option>
+                    <option value="256">256 × 256</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <span class="field-label">帧数</span>
+                  <select class="pixel-input" id="genFrames"></select>
+                </div>
+              </div>
+
+              <div class="gen-2col">
+                <div class="field">
+                  <span class="field-label">背景颜色 <b>bg_color</b></span>
+                  <div class="gen-bgrow">
+                    <input type="color" id="genBg" value="#004040">
+                    <code class="gen-bghex" id="genBgHex">#004040</code>
+                  </div>
+                  <div class="tiny muted">上传图先缩到像素尺寸、透明处填此色，再提交。</div>
+                </div>
+                <div class="field">
+                  <span class="field-label">输入图调色盘 <b id="genColorsV">32</b></span>
+                  <label class="switch gen-quant-sw">
+                    <input type="checkbox" id="genQuant">
+                    <span class="track"></span>
+                    <span class="tiny">启用</span>
+                  </label>
+                  <input type="range" id="genColors" min="2" max="64" step="2" value="32">
+                  <div class="tiny muted">上传图先在本地量化到这个色数。</div>
+                </div>
+              </div>
+
+              <button class="pixel-btn is-ghost is-sm gen-adv-toggle" id="genAdvToggle">高级选项 ▾</button>
+
+              <div class="gen-adv" id="genAdv" hidden>
+
+                <label class="switch" id="genExpandWrap">
+                  <input type="checkbox" id="genExpand" checked>
+                  <span class="track"></span>
+                  <span>AI 扩写 <span class="tiny muted">（V2 · 不会改你的原始提示词）</span></span>
+                </label>
+
+                <label class="switch" id="genFixSeedWrap">
+                  <input type="checkbox" id="genFixSeed">
+                  <span class="track"></span>
+                  <span>固定种子 <span class="tiny muted">（可复现）</span></span>
+                </label>
+
+                <div class="field" id="genSeedWrap" hidden>
+                  <span class="field-label">种子 <b>seed</b></span>
+                  <input class="pixel-input" id="genSeed" type="number" min="0" step="1" value="0">
+                </div>
+
+                <div class="field" id="genNoiseWrap">
+                  <span class="field-label">噪声强度 <b id="genNoiseV">0.6</b></span>
+                  <input type="range" id="genNoise" min="0" max="2" step="0.1" value="0.6">
+                </div>
+
+                <!-- 留白扩边：V1 用 9 宫格位置，V2 用四边数值 -->
+                <label class="switch" id="genPadWrap">
+                  <input type="checkbox" id="genPad">
+                  <span class="track"></span>
+                  <span>留白扩边 <span class="tiny muted">（放大控制帧，避免动作被裁）</span></span>
+                </label>
+
+                <div class="field" id="genPadPosWrap" hidden>
+                  <span class="field-label">内容位置 <b>padding_position</b></span>
+                  <select class="pixel-input" id="genPadPos">
+                    <option value="tl">左上 tl</option>
+                    <option value="tc">上方 tc</option>
+                    <option value="tr">右上 tr</option>
+                    <option value="ml">左侧 ml</option>
+                    <option value="mc" selected>居中 mc</option>
+                    <option value="mr">右侧 mr</option>
+                    <option value="bl">左下 bl</option>
+                    <option value="bc">下方 bc</option>
+                    <option value="br">右下 br</option>
+                  </select>
+                  <div class="tiny muted">V1 由后端按位置扩边。</div>
+                </div>
+
+                <div class="field" id="genPadXYWrap" hidden>
+                  <span class="field-label">四边留白 <b>padding</b> <span class="tiny muted">（步进 32）</span></span>
+                  <div class="gen-pad-grid">
+                    <label class="gen-pad-cell">上<input class="pixel-input" type="number" id="genPadTop" min="0" max="128" step="32" value="0"></label>
+                    <label class="gen-pad-cell">下<input class="pixel-input" type="number" id="genPadBottom" min="0" max="128" step="32" value="0"></label>
+                    <label class="gen-pad-cell">左<input class="pixel-input" type="number" id="genPadLeft" min="0" max="128" step="32" value="0"></label>
+                    <label class="gen-pad-cell">右<input class="pixel-input" type="number" id="genPadRight" min="0" max="128" step="32" value="0"></label>
+                  </div>
+                  <div class="tiny muted" id="genPadHint">提交 pixel_size = 尺寸 + 留白。</div>
+                </div>
+
+              </div>
+
+              <label class="switch">
+                <input type="checkbox" id="genLoop" checked>
+                <span class="track"></span>
+                <span>循环播放</span>
+              </label>
+
+            </div>
+          </section>
+
+          <button class="pixel-btn is-gold gen-run" id="genRun" style="min-height:52px;">
+            <span id="genRunLabel">开始生成</span>
+            <span class="gen-run-cost">
+              <s id="genCostOld">8</s>
+              <b id="genCost">6</b> 积分
+            </span>
+          </button>
+
+          <section class="pixel-card pixel-border gen-card">
+            <div class="pixel-card-title">结果</div>
+            <div class="gen-result" id="genResult">
+              <div class="result-empty">还没有生成结果</div>
+            </div>
+          </section>
+
+        </section>
+      </div>
+    </div><!-- /pageGen -->
   </main>
 
   <!-- ================= 日志 ================= -->

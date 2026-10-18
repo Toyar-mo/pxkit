@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -145,6 +146,38 @@ def public_view(cfg: dict | None = None) -> dict:
 
 # ------------------------------------------------------------------ HTTP 转发
 
+# 显式 TLS 上下文：部分 CDN 会掐掉老握手 / 空 SNI 的连接
+TLS = ssl.create_default_context()
+TLS.minimum_version = ssl.TLSVersion.TLSv1_2
+TLS.check_hostname = True
+TLS.verify_mode = ssl.CERT_REQUIRED
+
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) pxkit-web/1.0"
+
+
+def _open(req, timeout: int, attempts: int, retry_tls: bool = False):
+    """带重试的 urlopen。
+
+    重试与否按「请求有没有真的发出去」判断：
+      - GET：幂等，直接重试。
+      - POST /generate：一旦发出就可能已扣积分，重发 = 一次点击扣两次钱，所以默认不重试；
+        但如果是 **TLS 握手阶段** 失败（证书/协议层抛 ssl.SSLError），此时一个字节都还没发出去，
+        重试是安全的 —— 这条链路上这种偶发 EOF 真实存在，不重试用户就得手点第二次。
+    """
+    for i in range(attempts):
+        try:
+            return urllib.request.urlopen(req, timeout=timeout, context=TLS)
+        except urllib.error.HTTPError:
+            raise                      # HTTP 状态是后端给的确切答复，不重试
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            reason = getattr(e, "reason", e)
+            handshake = isinstance(reason, ssl.SSLError)
+            if i == attempts - 1 or not (retry_tls and handshake):
+                raise
+            time.sleep(0.6 * (i + 1))
+    raise RuntimeError("unreachable")
+
+
 def _request(cfg: dict, method: str, path: str, payload: dict | None = None) -> dict:
     """发一次请求，返回解析后的 JSON。所有失败都转成 RikaError。"""
     if not cfg.get("api_key"):
@@ -155,22 +188,28 @@ def _request(cfg: dict, method: str, path: str, payload: dict | None = None) -> 
     headers = {
         "X-API-Key": cfg["api_key"],
         "Accept": "application/json",
-        "User-Agent": "pxkit-web/1.0",
+        "User-Agent": UA,
     }
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
 
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    attempts = 3
+    retry_tls = method != "GET"   # 写请求只在 TLS 握手失败时重试，不冒重复扣费的风险
     try:
-        with urllib.request.urlopen(req, timeout=cfg["timeout"]) as resp:
+        with _open(req, cfg["timeout"], attempts, retry_tls) as resp:
             body = resp.read().decode("utf-8", "replace")
             status = resp.status
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")
         status = e.code
     except urllib.error.URLError as e:
-        raise RikaError(f"连不上后端：{e.reason}", 0) from e
+        reason = str(getattr(e, "reason", e))
+        extra = ""
+        if method != "GET":
+            extra = "；握手阶段失败，通常尚未提交、未扣积分，可直接重试"
+        raise RikaError(f"连不上后端：{reason}{extra}", 0) from e
     except TimeoutError as e:
         raise RikaError(f"请求超时（>{cfg['timeout']}s）", 0) from e
 
@@ -242,6 +281,10 @@ def submit(kind: str, images: list[str], params: dict, cfg: dict | None = None) 
         raise RikaError("缺少必填参数：" + "、".join(missing))
 
     path, _ = ENDPOINTS[kind]
+    # 预检：GET /credits 幂等、自带重试。先确认「连得上 + Key 有效」，
+    # 再让不可安全重试的 POST 出手。本机网络对 api.rika-ai.com 偶发 TLS 中断，
+    # 没有这一步，用户点一次就可能吃到一条「连不上」，然后被迫重点（有重复扣费风险）。
+    credits(cfg)
     obj = _request(cfg, "POST", path, payload)
     gen_id = obj.get("gen_id")
     if not gen_id:
