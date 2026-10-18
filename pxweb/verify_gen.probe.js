@@ -10,6 +10,19 @@
   };
   const logN = () => document.querySelectorAll("#logBody .ln").length;
 
+  // 前置：这份断言写的是 rika 云端契约（有积分、要参考图）。
+  // 当前后端若是本地 ComfyUI，先切回 rika，否则价格/参考图断言必然假失败。
+  const K0 = window.__genTest;
+  if (K0 && K0.isFree && K0.isFree()) {
+    await fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backend: "rika" }),
+    });
+    await K0.loadCaps();
+    await wait(400);
+  }
+
   // 切到生成页
   const navGen = document.querySelector('[data-nav="gen"]');
   if (navGen) navGen.click();
