@@ -472,16 +472,130 @@
       $("logToggle").textContent = bar.classList.contains("open") ? "收起 ▾" : "展开 ▴";
     });
 
-    // 导航（仅视觉）
+    // 导航（仅视觉；设置项由 bindSettings 打开弹层）
     document.querySelectorAll("[data-nav]").forEach((b) =>
       b.addEventListener("click", () => {
         document.querySelectorAll("[data-nav]").forEach((x) => x.classList.remove("is-active"));
         b.classList.add("is-active");
+        if (b.dataset.nav === "settings") return;
         log("切换到「" + b.textContent + "」— 当前版本只实现创作页");
       }));
 
     window.addEventListener("resize", () => {
       if (S.key) { S.zoom = fitZoom(); applyZoom(); }
+    });
+  }
+
+  // ---------------------------------------------------------------- 设置页
+  // 自定义模型配置：直接指向 rika 原后端。后端（rika.py）只做转发。
+  const apiGet = async (path) => {
+    const r = await fetch(path, { method: "GET" });
+    const j = await r.json().catch(() => ({ error: "响应不是 JSON" }));
+    if (!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status));
+    return j;
+  };
+
+  function cfgStatus(text, kind) {
+    const el = $("cfgStatus");
+    el.textContent = text;
+    el.className = "cfg-status" + (kind ? " " + kind : "");
+  }
+
+  function cfgFill(c) {
+    $("cfgBase").value = c.base_url || "";
+    $("cfgBase").placeholder = c.default_base_url || "";
+    $("cfgModel").value = c.model || "";
+    $("cfgTimeout").value = c.timeout;
+    $("cfgInterval").value = c.poll_interval;
+    $("cfgPoll").value = c.poll_timeout;
+    $("cfgKey").value = "";
+    $("cfgKey").placeholder = c.has_key ? c.api_key_masked : "粘贴 X-API-Key";
+    $("cfgKeyHint").textContent = c.has_key
+      ? "已保存 " + c.api_key_masked + " —— 留空保持不变。"
+      : "尚未配置，填入后点「测试连接」验证。";
+    const box = $("cfgEndpoints");
+    box.innerHTML = "";
+    (c.endpoints || []).forEach((e) => {
+      const row = document.createElement("div");
+      row.className = "cfg-ep";
+      row.innerHTML = '<span class="k"></span><span class="p"></span><span class="c"></span>';
+      row.querySelector(".k").textContent = e.kind;
+      row.querySelector(".p").textContent = e.path;
+      row.querySelector(".c").textContent = e.credits + " 积分";
+      box.appendChild(row);
+    });
+  }
+
+  function cfgPayload() {
+    const p = {
+      base_url: $("cfgBase").value.trim(),
+      model: $("cfgModel").value.trim(),
+      timeout: Number($("cfgTimeout").value) || undefined,
+      poll_interval: Number($("cfgInterval").value) || undefined,
+      poll_timeout: Number($("cfgPoll").value) || undefined,
+    };
+    const k = $("cfgKey").value.trim();
+    if (k) p.api_key = k;   // 留空 = 不改动已保存的 key
+    return p;
+  }
+
+  async function cfgLoad() {
+    try {
+      cfgFill((await apiGet("/api/config")).config);
+    } catch (e) {
+      cfgStatus("读取配置失败：" + e.message, "err");
+    }
+  }
+
+  function cfgOpen() {
+    $("cfgModal").hidden = false;
+    cfgStatus("就绪");
+    cfgLoad();
+    setTimeout(() => $("cfgBase").focus(), 30);
+  }
+
+  function cfgClose() { $("cfgModal").hidden = true; }
+
+  async function cfgTest() {
+    cfgStatus("测试中…");
+    try {
+      const j = await api("/api/config/test", cfgPayload());
+      cfgStatus(`连接成功 · 余额 ${j.credits} 积分 · ${j.base_url}`, "ok");
+      log(`后端连通，余额 ${j.credits} 积分`);
+    } catch (e) {
+      cfgStatus("测试失败：" + e.message, "err");
+      log("后端测试失败：" + e.message);
+    }
+  }
+
+  async function cfgSave() {
+    cfgStatus("保存中…");
+    try {
+      const j = await api("/api/config", cfgPayload());
+      cfgFill(j.config);
+      cfgStatus("已保存。", "ok");
+      log("模型配置已保存 → " + j.config.base_url +
+          (j.config.model ? " · model=" + j.config.model : ""));
+    } catch (e) {
+      cfgStatus("保存失败：" + e.message, "err");
+    }
+  }
+
+  function bindSettings() {
+    $("btnSettings").addEventListener("click", cfgOpen);
+    const navBtn = document.querySelector('[data-nav="settings"]');
+    if (navBtn) navBtn.addEventListener("click", cfgOpen);
+    $("cfgClose").addEventListener("click", cfgClose);
+    $("cfgModal").addEventListener("click", (e) => {
+      if (e.target === $("cfgModal")) cfgClose();
+    });
+    $("cfgTest").addEventListener("click", cfgTest);
+    $("cfgSave").addEventListener("click", cfgSave);
+    $("cfgKey").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); cfgTest(); }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("cfgModal").hidden) cfgClose();
     });
   }
 
@@ -493,6 +607,7 @@
     box.id = "swatches";
     anchor.appendChild(box);
     bind();
+    bindSettings();
     log("pxkit 前端已就绪 — 拖入图片或点击「打开图片」");
   });
 })();

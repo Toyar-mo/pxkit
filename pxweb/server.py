@@ -13,6 +13,14 @@
     GET  /work/<id>.png          处理结果
     POST /api/open               导入图片（dataURL）→ {key, w, h}
     POST /api/op                 执行操作 → {key, w, h, info, palette?, tiles?}
+
+    —— 生成后端（直接采用 rika 原后端，见 rika.py）——
+    GET  /api/config             读取配置（api_key 已脱敏）
+    POST /api/config             保存配置 {base_url?, api_key?, model?, timeout?}
+    POST /api/config/test        用候选配置测连通性 → {ok, credits}
+    POST /api/credits            查询积分余额
+    POST /api/gen                提交生成任务 → {gen_id, kind, credits}
+    POST /api/job                查询任务 {gen_id, wait?} → {job}
 """
 from __future__ import annotations
 
@@ -38,6 +46,8 @@ import numpy as np                                          # noqa: E402
 from PIL import Image                                       # noqa: E402
 
 from pxkit import background, grid, imgio, palette, sheet   # noqa: E402
+
+import rika                                                 # noqa: E402
 
 WORK.mkdir(parents=True, exist_ok=True)
 STATIC.mkdir(parents=True, exist_ok=True)
@@ -261,6 +271,8 @@ class Handler(BaseHTTPRequestHandler):
             self._file(WORK / name)
         elif p == "/api/ops":
             self._json({"ops": sorted(OPS)})
+        elif p == "/api/config":
+            self._json({"ok": True, "config": rika.public_view()})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -286,9 +298,38 @@ class Handler(BaseHTTPRequestHandler):
                 key = body.get("key") if same else _put(out)
                 self._json({**_meta(key, out), "info": info, "same": same})
                 return
+            # ---------------- 生成后端：直接转发 rika 原后端 ----------------
+            if p == "/api/config":
+                cfg = rika.save(body)
+                self._json({"ok": True, "config": rika.public_view(cfg)})
+                return
+            if p == "/api/config/test":
+                self._json(rika.test_connection(body))
+                return
+            if p == "/api/credits":
+                self._json({"ok": True, "credits": rika.credits()})
+                return
+            if p == "/api/gen":
+                kind = body.get("kind") or "v2"
+                gen_id = rika.submit(
+                    kind,
+                    body.get("images") or [],
+                    body.get("params") or {},
+                )
+                _, cost = rika.ENDPOINTS.get(kind, ("", 0))
+                self._json({"ok": True, "gen_id": gen_id, "kind": kind, "credits": cost})
+                return
+            if p == "/api/job":
+                gen_id = body.get("gen_id") or ""
+                job = rika.wait(gen_id) if body.get("wait") else rika.job(gen_id)
+                self._json({"ok": True, "job": job})
+                return
+
             self._json({"error": "not found"}, 404)
         except KeyError as e:
             self._json({"error": f"图片不存在：{e}"}, 404)
+        except rika.RikaError as e:
+            self._json({"error": str(e), "detail": e.detail}, e.status or 502)
         except Exception as e:                              # noqa: BLE001
             self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 

@@ -18,9 +18,11 @@
       <button class="nav-item" data-nav="detect">检测</button>
       <button class="nav-item" data-nav="sheet">精灵表</button>
       <button class="nav-item" data-nav="help">关于</button>
+      <button class="nav-item" data-nav="settings">设置</button>
     </nav>
     <div class="topbar-right">
       <div class="lang"><span class="on">中文</span><span>EN</span></div>
+      <button class="pixel-btn is-ghost is-sm" id="btnSettings">⚙ 设置</button>
       <button class="pixel-btn is-gold is-sm" id="btnOpenTop">打开图片</button>
     </div>
   </header>
@@ -182,6 +184,76 @@
       <span style="margin-left:auto" class="muted" id="logToggle">收起 ▾</span>
     </div>
     <div class="logbar-body" id="logBody"></div>
+  </div>
+
+  <!-- ================= 设置弹层：自定义模型配置 ================= -->
+  <div class="pixel-modal-backdrop" id="cfgModal" hidden>
+    <div class="pixel-card pixel-border cfg-modal" role="dialog" aria-modal="true" aria-labelledby="cfgTitle">
+      <div class="cfg-head">
+        <div>
+          <div class="cfg-title" id="cfgTitle">自定义模型配置</div>
+          <div class="tiny muted">直接调用 rika 原项目后端 · 本地不重训、不降级</div>
+        </div>
+        <button class="pixel-btn is-ghost is-sm" id="cfgClose" title="关闭">✕</button>
+      </div>
+
+      <div class="cfg-body">
+        <section class="cfg-sec">
+          <div class="cfg-sec-title">连接</div>
+
+          <div class="field">
+            <label for="cfgBase">后端地址 <b>Base URL</b></label>
+            <input class="pixel-input" id="cfgBase" spellcheck="false" autocomplete="off">
+            <div class="tiny muted">默认 <code>https://api.rika-ai.com/v1/api</code>；可换成自建镜像或代理。</div>
+          </div>
+
+          <div class="field">
+            <label for="cfgKey">API Key</label>
+            <input class="pixel-input" id="cfgKey" type="password" spellcheck="false"
+                   autocomplete="off" placeholder="粘贴 X-API-Key">
+            <div class="tiny muted" id="cfgKeyHint">尚未配置。</div>
+          </div>
+
+          <div class="field">
+            <label for="cfgModel">模型覆盖 <b>可选</b></label>
+            <input class="pixel-input" id="cfgModel" spellcheck="false"
+                   autocomplete="off" placeholder="留空 = 用后端默认">
+            <div class="tiny muted">后端支持时生效，会写进请求体的 <code>model</code> 字段。</div>
+          </div>
+        </section>
+
+        <section class="cfg-sec">
+          <div class="cfg-sec-title">高级</div>
+          <div class="cfg-grid">
+            <div class="field">
+              <label for="cfgTimeout">请求超时 <b>秒</b></label>
+              <input class="pixel-input" id="cfgTimeout" type="number" min="1" step="1">
+            </div>
+            <div class="field">
+              <label for="cfgInterval">轮询间隔 <b>秒</b></label>
+              <input class="pixel-input" id="cfgInterval" type="number" min="1" step="1">
+            </div>
+            <div class="field">
+              <label for="cfgPoll">轮询上限 <b>秒</b></label>
+              <input class="pixel-input" id="cfgPoll" type="number" min="1" step="1">
+            </div>
+          </div>
+        </section>
+
+        <section class="cfg-sec">
+          <div class="cfg-sec-title">端点与积分</div>
+          <div class="cfg-eps" id="cfgEndpoints"></div>
+        </section>
+      </div>
+
+      <div class="cfg-foot">
+        <div class="cfg-status" id="cfgStatus">就绪</div>
+        <div class="cfg-actions">
+          <button class="pixel-btn is-ghost" id="cfgTest">测试连接</button>
+          <button class="pixel-btn is-gold" id="cfgSave">保存</button>
+        </div>
+      </div>
+    </div>
   </div>
 
 </div>
